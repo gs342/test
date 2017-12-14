@@ -1,0 +1,104 @@
+Description: <short summary of the patch>
+ TODO: Put a short summary on the line above and replace this paragraph
+ with a longer explanation of this change. Complete the meta-information
+ with other relevant fields (see below for details). To make it easier, the
+ information below has been extracted from the changelog. Adjust it or drop
+ it.
+ .
+ qtbase-opensource-src (5.6.1+dfsg-13deepin) unstable; urgency=medium
+ .
+   * remove 0010 patch
+Author: Deepin Packages Builder <zs@zs-PC>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: 2017-12-14
+
+--- qtbase-opensource-src-5.6.1+dfsg.orig/src/widgets/kernel/qwidget.cpp
++++ qtbase-opensource-src-5.6.1+dfsg/src/widgets/kernel/qwidget.cpp
+@@ -2397,6 +2397,28 @@ void QWidgetPrivate::updateIsTranslucent
+     }
+ }
+ 
++class Q_DECL_HIDDEN PublicQPaintEngine : public QPaintEngine
++{
++public:
++    inline void setSystemClip(const QRegion &region)
++    {
++        d_ptr->systemClip = region;
++    }
++
++    inline QRegion systemClip() const
++    {
++        return d_ptr->systemClip;
++    }
++};
++
++static inline void setClipRegion(QPainter *pa, const QRegion &rgn)
++{
++    if (pa->paintEngine() && pa->device() && pa->device()->devicePixelRatioF() > 1.0)
++        static_cast<PublicQPaintEngine*>(pa->paintEngine())->setSystemClip(rgn * pa->device()->devicePixelRatioF());
++    else
++        pa->setClipRegion(rgn);
++}
++
+ static inline void fillRegion(QPainter *painter, const QRegion &rgn, const QBrush &brush)
+ {
+     Q_ASSERT(painter);
+@@ -2411,7 +2433,7 @@ static inline void fillRegion(QPainter *
+ #else
+         {
+             const QRect rect(rgn.boundingRect());
+-            painter->setClipRegion(rgn);
++            setClipRegion(painter, rgn);
+             painter->drawTiledPixmap(rect, brush.texture(), rect.topLeft());
+         }
+ #endif // Q_DEAD_CODE_FROM_QT4_MAC
+@@ -2419,13 +2441,25 @@ static inline void fillRegion(QPainter *
+     } else if (brush.gradient()
+                && brush.gradient()->coordinateMode() == QGradient::ObjectBoundingMode) {
+         painter->save();
+-        painter->setClipRegion(rgn);
++        const QRegion save_system_clip = static_cast<PublicQPaintEngine*>(painter->paintEngine())->systemClip();
++        setClipRegion(painter, rgn);
+         painter->fillRect(0, 0, painter->device()->width(), painter->device()->height(), brush);
++        static_cast<PublicQPaintEngine*>(painter->paintEngine())->setSystemClip(save_system_clip);
+         painter->restore();
+     } else {
+-        const QVector<QRect> &rects = rgn.rects();
+-        for (int i = 0; i < rects.size(); ++i)
+-            painter->fillRect(rects.at(i), brush);
++        if (!painter->device() || qFuzzyCompare(painter->device()->devicePixelRatioF(), 1.0)) {
++            const QVector<QRect> &rects = rgn.rects();
++            for (int i = 0; i < rects.size(); ++i)
++                painter->fillRect(rects.at(i), brush);
++            return;
++        }
++
++        const QRegion save_system_clip = static_cast<PublicQPaintEngine*>(painter->paintEngine())->systemClip();
++        const QRegion save_clip = painter->clipRegion();
++        setClipRegion(painter, rgn);
++        painter->fillRect(0, 0, painter->device()->width(), painter->device()->height(), brush);
++        static_cast<PublicQPaintEngine*>(painter->paintEngine())->setSystemClip(save_system_clip);
++        painter->setClipRegion(save_clip);
+     }
+ }
+ 
+@@ -2467,7 +2501,7 @@ void QWidgetPrivate::paintBackground(QPa
+         fillRegion(painter, rgn, autoFillBrush);
+ 
+     if (q->testAttribute(Qt::WA_StyledBackground)) {
+-        painter->setClipRegion(rgn);
++        setClipRegion(painter, rgn);
+         QStyleOption opt;
+         opt.initFrom(q);
+         q->style()->drawPrimitive(QStyle::PE_Widget, &opt, painter, q);
